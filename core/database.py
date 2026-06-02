@@ -106,7 +106,7 @@ class Session(TimestampMixin, Base):
     message_count = Column(Integer, default=0)
     total_input_tokens = Column(Integer, default=0)
     total_output_tokens = Column(Integer, default=0)
-    mode = Column(String, nullable=True)  # 'agent', 'chat', or 'research'
+    mode = Column(String, nullable=True)  # 'agent', 'loop', 'chat', or 'research'
     crew_member_id = Column(String, nullable=True)  # links to crew_members.id
 
     # Relationship to chat messages

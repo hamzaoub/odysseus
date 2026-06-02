@@ -45,17 +45,25 @@ export function handleUIControl(uiData) {
 
     } else if (uiEvent === 'set_mode' || uiData.ui_event === 'set_mode') {
       var modeVal = uiData.mode;
+      if (modeVal !== 'agent' && modeVal !== 'loop' && modeVal !== 'chat') modeVal = 'chat';
       var agentBtn = document.getElementById('mode-agent-btn');
+      var loopBtn = document.getElementById('mode-loop-btn');
       var chatBtn = document.getElementById('mode-chat-btn');
-      if (agentBtn && chatBtn) {
-        agentBtn.classList.toggle('active', modeVal === 'agent');
-        chatBtn.classList.toggle('active', modeVal !== 'agent');
+      if (agentBtn || loopBtn || chatBtn) {
+        if (agentBtn) agentBtn.classList.toggle('active', modeVal === 'agent');
+        if (loopBtn) loopBtn.classList.toggle('active', modeVal === 'loop');
+        if (chatBtn) chatBtn.classList.toggle('active', modeVal === 'chat');
+        var toggle = (agentBtn || loopBtn || chatBtn) ? (agentBtn || loopBtn || chatBtn).closest('.mode-toggle') : null;
+        if (toggle) {
+          toggle.classList.toggle('mode-loop', modeVal === 'loop');
+          toggle.classList.toggle('mode-chat', modeVal === 'chat');
+        }
       }
       var ts2 = Storage.getJSON(Storage.KEYS.TOGGLES, {});
       ts2.mode = modeVal;
       Storage.setJSON(Storage.KEYS.TOGGLES, ts2);
       document.querySelectorAll('[data-mode-tool]').forEach(function(b) {
-        b.style.display = modeVal === 'agent' ? '' : 'none';
+        b.style.display = (modeVal === 'agent' || modeVal === 'loop') ? '' : 'none';
       });
 
     } else if (uiEvent === 'switch_model' || uiData.ui_event === 'switch_model') {

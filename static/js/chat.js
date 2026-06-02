@@ -742,15 +742,18 @@ import createResearchSynapse from './researchSynapse.js';
       }
       // Web toggle: pre-search in Chat mode, tool permission in Agent mode
       const toggleState = Storage.loadToggleState();
-      let isAgentMode = (toggleState.mode || 'chat') === 'agent';
+      let modeForRequest = toggleState.mode || 'chat';
+      if (!['agent', 'loop', 'chat'].includes(modeForRequest)) modeForRequest = 'chat';
+      let isToolMode = (modeForRequest === 'agent' || modeForRequest === 'loop');
       // Auto-escalate to agent mode when a document is open — the user expects
       // the AI to see the document and have tools to edit it
-      if (!isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
-        isAgentMode = true;
+      if (!isToolMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
+        modeForRequest = 'agent';
+        isToolMode = true;
       }
-      fd.append('mode', isAgentMode ? 'agent' : 'chat');
+      fd.append('mode', modeForRequest);
       if (el('web-toggle').checked) {
-        if (isAgentMode) {
+        if (isToolMode) {
           fd.append('allow_web_search', 'true');
         } else {
           fd.append('use_web', 'true');
@@ -946,12 +949,19 @@ import createResearchSynapse from './researchSynapse.js';
         if (errText.includes('tool') || errText.includes('auto')) {
           errText = 'This model doesn\'t support agent tools — switched to Chat mode. Try again.';
           const _ab = document.getElementById('mode-agent-btn');
+          const _lb = document.getElementById('mode-loop-btn');
           const _cb = document.getElementById('mode-chat-btn');
-          if (_ab && _cb) {
-            _ab.classList.remove('active');
-            _cb.classList.add('active');
-            const _toggle = _ab.closest('.mode-toggle');
-            if (_toggle) _toggle.classList.add('mode-chat');
+          if (typeof window._applyModeVisual === 'function') {
+            window._applyModeVisual('chat');
+          } else {
+            if (_ab) _ab.classList.remove('active');
+            if (_lb) _lb.classList.remove('active');
+            if (_cb) _cb.classList.add('active');
+            const _toggle = (_ab || _lb || _cb) ? (_ab || _lb || _cb).closest('.mode-toggle') : null;
+            if (_toggle) {
+              _toggle.classList.remove('mode-loop');
+              _toggle.classList.add('mode-chat');
+            }
           }
           if (typeof Storage !== 'undefined' && Storage.KEYS) {
             const _st = Storage.getJSON(Storage.KEYS.TOGGLES, {});
@@ -1755,6 +1765,14 @@ import createResearchSynapse from './researchSynapse.js';
                 if (sessionModule && sessionModule.updateModelPicker) {
                   sessionModule.updateModelPicker();
                 }
+                continue;
+              } else if (json.type === 'supervisor_note') {
+                if (_isBg) continue;
+                var _sn = json.data || {};
+                var _msg = 'Loop supervisor intervened';
+                if (_sn.trigger) _msg += ` (${_sn.trigger})`;
+                if (_sn.action && _sn.action !== 'none') _msg += `: ${_sn.action.replace('_', ' ')}`;
+                if (uiModule && uiModule.showToast) uiModule.showToast(_msg, 2600);
                 continue;
               } else if (json.type === 'model_info') {
                 // Update role label with model name as soon as we know it

@@ -66,8 +66,12 @@ window.addEventListener('pageshow', clearFreshComposerRestore);
       // Agent mode toggle — force chat mode by hiding the Agent toggle button.
       if (privs.can_use_agent === false) {
         const _agent = document.getElementById('mode-agent-btn');
+        const _loop = document.getElementById('mode-loop-btn');
         const _chat = document.getElementById('mode-chat-btn');
+        const _modeToggle = document.querySelector('.mode-toggle');
         if (_agent) _agent.style.display = 'none';
+        if (_loop) _loop.style.display = 'none';
+        if (_modeToggle) _modeToggle.style.display = 'none';
         if (_chat) { _chat.classList.add('active'); _chat.click?.(); }
       }
     } catch (_) { /* DOM not ready or unexpected shape — UI gates are non-fatal */ }

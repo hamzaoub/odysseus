@@ -12,13 +12,18 @@ import json
 import re
 import time
 import logging
-from typing import AsyncGenerator, List, Dict, Optional, Set
+from typing import Any, AsyncGenerator, List, Dict, Optional, Set, Tuple
 
 from src.llm_core import stream_llm, stream_llm_with_fallback
 from src.model_context import estimate_tokens
 from src.settings import get_setting
 from src.prompt_security import untrusted_context_message
 from src.tool_security import blocked_tools_for_owner
+from src.loop_supervisor import (
+    should_intervene as loop_should_intervene,
+    build_supervisor_prompt,
+    parse_supervisor_decision,
+)
 from src.agent_tools import (
     parse_tool_blocks,
     strip_tool_blocks,
@@ -324,7 +329,7 @@ If the user asks for a reminder/alarm before the event, pass `reminder_minutes` 
     "send_to_session": "- ```send_to_session``` — Send a message to another session. Line 1 = session_id, rest = message. Use for orchestrating work across sessions.",
     "search_chats": "- ```search_chats``` — Search across all chat history. Use when user asks 'did we discuss X?' or 'find the conversation about Y'.",
     "pipeline": "- ```pipeline``` — Run a multi-step AI pipeline. Args (JSON) with ordered steps, each specifying a model and prompt. Use for complex workflows.",
-    "ui_control": "- ```ui_control``` — Control the UI: toggle tools on/off, OPEN PANELS, open email reply drafts, switch models, change themes. Commands: `toggle <name> on/off` (names: bash/shell, web/search, research, incognito, document_editor/documents), `open_panel <name>` (panels: documents, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), `open_email_reply <uid> <folder> <reply|reply-all|ai-reply>` (opens an email compose document, does NOT send), `set_mode agent/chat`, `switch_model <name>`, `set_theme <preset>`, `create_theme <name> <bg> <fg> <panel> <border> <accent>` (optional key=val for advanced colors AND background effects: bgPattern=<none|dots|synapse|rain|constellations|perlin-flow|petals|sparkles|embers>, bgEffectColor=#RRGGBB, bgEffectIntensity=<num>, bgEffectSize=<num>, frosted=true|false). \"open documents\" / \"open library\" / \"show gallery\" / \"open inbox\" / \"open notes\" / \"open cookbook\" all map to `open_panel <name>`. Theme presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute.",
+    "ui_control": "- ```ui_control``` — Control the UI: toggle tools on/off, OPEN PANELS, open email reply drafts, switch models, change themes. Commands: `toggle <name> on/off` (names: bash/shell, web/search, research, incognito, document_editor/documents), `open_panel <name>` (panels: documents, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), `open_email_reply <uid> <folder> <reply|reply-all|ai-reply>` (opens an email compose document, does NOT send), `set_mode agent/loop/chat`, `switch_model <name>`, `set_theme <preset>`, `create_theme <name> <bg> <fg> <panel> <border> <accent>` (optional key=val for advanced colors AND background effects: bgPattern=<none|dots|synapse|rain|constellations|perlin-flow|petals|sparkles|embers>, bgEffectColor=#RRGGBB, bgEffectIntensity=<num>, bgEffectSize=<num>, frosted=true|false). \"open documents\" / \"open library\" / \"show gallery\" / \"open inbox\" / \"open notes\" / \"open cookbook\" all map to `open_panel <name>`. Theme presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute.",
     "list_served_models": "- ```list_served_models``` — Show what the Cookbook (LLM-serving subsystem) is currently running. NO args. Use this for ANY 'what's running' / 'what's serving' / 'show my cookbook' / 'is anything up' query. DO NOT shell out (`ps aux`, `docker ps`, etc.) — this tool is the source of truth. Failed serve tasks include recent logs plus diagnosis/retry suggestions; use those suggestions to call `serve_model` again with an adjusted command when appropriate.",
     "stop_served_model": "- ```stop_served_model``` — Stop a running model server. Args (JSON): {\"session_id\": \"<from list_served_models>\"}. Use for 'kill my cookbook' / 'stop the model' / 'shut down vLLM'.",
     "download_model": "- ```download_model``` — Download a HuggingFace model. Args (JSON): {\"repo_id\": \"Qwen/Qwen3-8B\", \"host\": \"user@gpu-box\"?, \"include\": \"*Q4_K_M*\"?}.",
@@ -1297,6 +1302,144 @@ async def _run_verifier_subagent(
     return [r.strip() for r in reasons.split(";") if r.strip()]
 
 
+def _candidate_key(url: str, model: str) -> Tuple[str, str]:
+    return ((url or "").rstrip("/"), (model or "").strip())
+
+
+def _dedupe_candidates(primary: tuple, extras: List[tuple]) -> List[tuple]:
+    out: List[tuple] = []
+    seen = set()
+    for cand in [primary] + list(extras or []):
+        if not cand or len(cand) < 2:
+            continue
+        url, model = cand[0], cand[1]
+        if not url or not model:
+            continue
+        key = _candidate_key(url, model)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((url, model, cand[2] if len(cand) > 2 else None))
+    return out
+
+
+def _tool_result_failed(result: Dict[str, Any]) -> bool:
+    if not isinstance(result, dict):
+        return True
+    if result.get("error"):
+        return True
+    if result.get("success") is False:
+        return True
+    exit_code = result.get("exit_code")
+    if isinstance(exit_code, int) and exit_code != 0:
+        return True
+    return False
+
+
+def _resolve_supervisor_candidates(
+    worker_endpoint_url: str,
+    worker_model: str,
+    worker_headers: Optional[Dict],
+    owner: Optional[str] = None,
+) -> List[tuple]:
+    """Resolve supervisor model candidates.
+
+    Order:
+      1) Explicit loop_supervisor_* settings when present
+      2) Utility model config when explicitly configured
+      3) Current worker model
+    """
+    out: List[tuple] = []
+    worker_cand = (worker_endpoint_url, worker_model, worker_headers)
+
+    try:
+        from src.settings import load_settings, get_user_setting
+        from src.endpoint_resolver import resolve_endpoint, resolve_endpoint_by_id
+
+        settings = load_settings()
+
+        ls_ep = (get_user_setting("loop_supervisor_endpoint_id", owner or "", settings.get("loop_supervisor_endpoint_id", "")) or "").strip()
+        ls_model = (get_user_setting("loop_supervisor_model", owner or "", settings.get("loop_supervisor_model", "")) or "").strip()
+        if ls_ep or ls_model:
+            resolved = None
+            if ls_ep:
+                resolved = resolve_endpoint_by_id(ls_ep, ls_model or "")
+            elif ls_model and worker_endpoint_url:
+                resolved = (worker_endpoint_url, ls_model, worker_headers)
+            if resolved and resolved[0] and resolved[1]:
+                out.append(resolved)
+
+        if not out:
+            util_ep = (get_user_setting("utility_endpoint_id", owner or "", settings.get("utility_endpoint_id", "")) or "").strip()
+            util_model = (get_user_setting("utility_model", owner or "", settings.get("utility_model", "")) or "").strip()
+            # Only treat Utility as configured when one of its keys is
+            # explicitly set; otherwise fall through to worker model.
+            if util_ep or util_model:
+                u_url, u_model, u_headers = resolve_endpoint("utility", owner=owner)
+                if u_url and u_model:
+                    out.append((u_url, u_model, u_headers))
+    except Exception as e:
+        logger.debug(f"[loop] supervisor candidate resolution failed: {e}")
+
+    ordered: List[tuple] = []
+    seen = set()
+    for cand in list(out) + [worker_cand]:
+        if not cand or len(cand) < 2:
+            continue
+        key = _candidate_key(cand[0], cand[1])
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append((cand[0], cand[1], cand[2] if len(cand) > 2 else None))
+    if not ordered:
+        ordered = [worker_cand]
+    return ordered
+
+
+def _candidate_descriptions(candidates: List[tuple]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for i, cand in enumerate(candidates or []):
+        url, model = cand[0], cand[1]
+        out.append({
+            "index": i,
+            "model": model,
+            "endpoint": (url or "")[:180],
+        })
+    return out
+
+
+async def _call_loop_supervisor(
+    *,
+    snapshot: Dict[str, Any],
+    runtime_candidates: List[tuple],
+    worker_endpoint_url: str,
+    worker_model: str,
+    worker_headers: Optional[Dict],
+    owner: Optional[str] = None,
+) -> Dict[str, Any]:
+    from src.llm_core import llm_call_async_with_fallback
+
+    supervisor_candidates = _resolve_supervisor_candidates(
+        worker_endpoint_url=worker_endpoint_url,
+        worker_model=worker_model,
+        worker_headers=worker_headers,
+        owner=owner,
+    )
+    prompt = build_supervisor_prompt(snapshot, _candidate_descriptions(runtime_candidates))
+    try:
+        raw = await llm_call_async_with_fallback(
+            supervisor_candidates,
+            [{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=500,
+            timeout=60,
+        )
+        return parse_supervisor_decision(raw or "")
+    except Exception as e:
+        logger.warning(f"[loop] supervisor call failed: {e}")
+        return {"action": "none", "reason": "supervisor_call_failed", "instruction": "", "candidate_index": None}
+
+
 async def stream_agent_loop(
     endpoint_url: str,
     model: str,
@@ -1314,6 +1457,7 @@ async def stream_agent_loop(
     owner: Optional[str] = None,
     relevant_tools: Optional[Set[str]] = None,
     fallbacks: Optional[List[tuple]] = None,
+    supervisor_enabled: bool = False,
     _is_teacher_run: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Streaming agent loop generator.
@@ -1507,6 +1651,19 @@ async def stream_agent_loop(
     last_round_input_tokens = 0  # Last round's input tokens (for context % peak)
     has_real_usage = False
     total_tool_calls = 0  # for budget enforcement
+    runtime_endpoint_url = endpoint_url
+    runtime_model = model
+    runtime_headers = headers
+    runtime_fallbacks = list(fallbacks or [])
+    try:
+        supervisor_max = int(get_setting("loop_supervisor_max_interventions", 2) or 2)
+    except Exception:
+        supervisor_max = 2
+    if supervisor_max < 0:
+        supervisor_max = 0
+    supervisor_interventions = 0
+    supervisor_switched_keys: Set[Tuple[str, str]] = set()
+    tool_failure_streak = 0
 
     # Loop-breaker state. Small models (e.g. deepseek-v4-flash) can get
     # stuck firing the same tool call over and over with no text — burns
@@ -1527,6 +1684,9 @@ async def stream_agent_loop(
         round_response = ""
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
         native_tool_calls = []  # populated if model uses function calling
+        round_stream_error = False
+        round_useful_output = False
+        round_tool_failures = 0
         # Reset doc streaming state per round
         _doc_acc = ""
         _doc_opened = False
@@ -1577,12 +1737,19 @@ async def stream_agent_loop(
         agent_stream_timeout = int(get_setting("agent_stream_timeout_seconds", 300) or 300)
 
         _tool_names_sent = [t.get("function", {}).get("name") for t in (all_tool_schemas or []) if t.get("function")]
-        logger.info(f"[agent-debug] round={round_num} model={model} _is_api_model={_is_api_model} tools_sent={len(_tool_names_sent)} tool_names={_tool_names_sent[:15]} relevant_tools={sorted(_relevant_tools)[:15] if _relevant_tools else 'ALL'}")
+        logger.info(
+            f"[agent-debug] round={round_num} model={runtime_model} _is_api_model={_is_api_model} "
+            f"tools_sent={len(_tool_names_sent)} tool_names={_tool_names_sent[:15]} "
+            f"relevant_tools={sorted(_relevant_tools)[:15] if _relevant_tools else 'ALL'}"
+        )
 
         # Primary target + any configured fallback models. stream_llm_with_fallback
         # only switches on a pre-content failure, so streamed output is never
         # duplicated; the dead-host cooldown keeps repeat primary attempts cheap.
-        _candidates = [(endpoint_url, model, headers)] + list(fallbacks or [])
+        _candidates = _dedupe_candidates(
+            (runtime_endpoint_url, runtime_model, runtime_headers),
+            runtime_fallbacks,
+        )
         # stream_llm enforces a per-read INACTIVITY timeout (httpx read=timeout),
         # which kills a wedged/silent endpoint. This wall-clock deadline is the
         # complementary cap for the rare stream that trickles bytes forever and
@@ -1602,6 +1769,7 @@ async def stream_agent_loop(
                 break
             # Forward error events from stream_llm to the frontend
             if chunk.startswith("event: error"):
+                round_stream_error = True
                 yield chunk
                 continue
             if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
@@ -1610,6 +1778,8 @@ async def stream_agent_loop(
                     # IMPORTANT: check type-based events BEFORE "delta" key,
                     # because tool_call_delta also has an "arg_delta" field.
                     if data.get("type") == "tool_call_delta":
+                        if data.get("arg_delta"):
+                            round_useful_output = True
                         # Stream document content to frontend as AI generates it
                         logger.debug(f"tool_call_delta: name={data.get('name')}, len(arg_delta)={len(data.get('arg_delta', ''))}")
                         _doc_acc += data.get("arg_delta", "")
@@ -1647,6 +1817,8 @@ async def stream_agent_loop(
                                     yield f'data: {json.dumps({"type": "doc_stream_delta", "content": decoded})}\n\n'
                     elif data.get("type") == "tool_calls":
                         native_tool_calls = data.get("calls", [])
+                        if native_tool_calls:
+                            round_useful_output = True
                         logger.info(f"Agent round {round_num}: received {len(native_tool_calls)} native tool call(s)")
                     elif data.get("type") == "usage":
                         u = data.get("data", {})
@@ -1675,6 +1847,8 @@ async def stream_agent_loop(
                         else:
                             round_response += data["delta"]
                             full_response += data["delta"]
+                            if str(data["delta"]).strip():
+                                round_useful_output = True
                         yield chunk  # Stream all rounds
                         # Detect text-fence doc streaming for rounds 2+
                         # (round 1 is handled by frontend fence detection + server fenced block path)
@@ -1720,6 +1894,7 @@ async def stream_agent_loop(
                                     _doc_last_len = 0
                     elif data.get("error"):
                         err_msg = data.get("error", "unknown")
+                        round_stream_error = True
                         logger.error(f"Agent round {round_num}: stream error: {err_msg}")
                         yield f'data: {json.dumps({"delta": chr(10) + chr(10) + "*[Stream error: " + str(err_msg) + "]*"})}\n\n'
                 except json.JSONDecodeError:
@@ -1760,8 +1935,8 @@ async def stream_agent_loop(
                         ),
                     }]
                     _raw = await llm_call_async(
-                        url=endpoint_url, model=model, messages=_synth_messages,
-                        headers=headers, temperature=0.3, max_tokens=max_tokens, timeout=60,
+                        url=runtime_endpoint_url, model=runtime_model, messages=_synth_messages,
+                        headers=runtime_headers, temperature=0.3, max_tokens=max_tokens, timeout=60,
                     )
                     _synth = _THINK_RE.sub("", strip_tool_blocks(_raw or "")).strip()
                 except Exception as _e:
@@ -1813,6 +1988,82 @@ async def stream_agent_loop(
         round_texts.append(cleaned_round)
 
         if not tool_blocks:
+            if cleaned_round:
+                tool_failure_streak = 0
+
+            if supervisor_enabled and not _force_answer and supervisor_interventions < max(supervisor_max, 0):
+                loop_breaker_near = (_stuck_rounds >= 3) or any(n >= 12 for n in _tool_type_counts.values())
+                snapshot = {
+                    "round": round_num,
+                    "max_rounds": max_rounds,
+                    "tool_failure_streak": tool_failure_streak,
+                    "no_progress_streak": _stuck_rounds,
+                    "loop_breaker_proximity": loop_breaker_near,
+                    "stream_error_no_output": bool(round_stream_error and not round_useful_output),
+                    "had_text": bool(_THINK_RE.sub("", cleaned_round).strip()),
+                }
+                _need_help, _trigger_reason = loop_should_intervene(snapshot)
+                if _need_help:
+                    _runtime_candidates = _dedupe_candidates(
+                        (runtime_endpoint_url, runtime_model, runtime_headers),
+                        runtime_fallbacks,
+                    )
+                    decision = await _call_loop_supervisor(
+                        snapshot=snapshot,
+                        runtime_candidates=_runtime_candidates,
+                        worker_endpoint_url=runtime_endpoint_url,
+                        worker_model=runtime_model,
+                        worker_headers=runtime_headers,
+                        owner=owner,
+                    )
+                    _action = (decision.get("action") or "none").strip().lower()
+                    _note = {
+                        "type": "supervisor_note",
+                        "data": {
+                            "round": round_num,
+                            "trigger": _trigger_reason,
+                            "action": _action,
+                            "reason": decision.get("reason") or "",
+                        },
+                    }
+                    _acted = False
+
+                    if _action == "inject_instruction":
+                        _inst = (decision.get("instruction") or "").strip()
+                        if _inst:
+                            messages.append({
+                                "role": "system",
+                                "content": f"Supervisor guidance (runtime-only): {_inst}",
+                            })
+                            supervisor_interventions += 1
+                            _acted = True
+                    elif _action == "switch_candidate":
+                        _idx = decision.get("candidate_index")
+                        if isinstance(_idx, int) and 0 <= _idx < len(_runtime_candidates):
+                            _sel_url, _sel_model, _sel_headers = _runtime_candidates[_idx]
+                            _new_key = _candidate_key(_sel_url, _sel_model)
+                            _cur_key = _candidate_key(runtime_endpoint_url, runtime_model)
+                            if _new_key != _cur_key and _new_key not in supervisor_switched_keys:
+                                _old_url, _old_model = runtime_endpoint_url, runtime_model
+                                runtime_endpoint_url, runtime_model, runtime_headers = _sel_url, _sel_model, _sel_headers
+                                supervisor_switched_keys.add(_new_key)
+                                supervisor_interventions += 1
+                                tool_failure_streak = 0
+                                set_active_model(runtime_model)
+                                _acted = True
+                                yield f'data: {json.dumps({"type": "model_fallback", "data": {"old_model": _old_model, "new_model": runtime_model, "old_endpoint": _old_url, "new_endpoint": runtime_endpoint_url, "reason": "loop_supervisor_switch"}})}\n\n'
+                                yield f'data: {json.dumps({"type": "model_info", "model": runtime_model})}\n\n'
+
+                    if _acted:
+                        yield f'data: {json.dumps(_note)}\n\n'
+                        if round_response.strip() or round_reasoning.strip():
+                            _msg = {"role": "assistant", "content": round_response}
+                            if round_reasoning:
+                                _msg["reasoning_content"] = round_reasoning
+                            messages.append(_msg)
+                        full_response += "\n\n"
+                        yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+                        continue
             # ── Completion verifier (mechanism 3a) ────────────────────
             # The model is finishing. If this was an effectful agentic turn,
             # have a fresh-context verifier independently check the work
@@ -1834,7 +2085,7 @@ async def stream_agent_loop(
                 _vfail = await _run_verifier_subagent(
                     _verifier_instruction,
                     _build_actions_snapshot(tool_events),
-                    endpoint_url=endpoint_url, model=model, headers=headers,
+                    endpoint_url=runtime_endpoint_url, model=runtime_model, headers=runtime_headers,
                 )
                 if _vfail:
                     _verifier_rounds += 1
@@ -2044,6 +2295,9 @@ async def stream_agent_loop(
                     f'data: {json.dumps({"type": "ui_control", "data": result})}\n\n'
                 )
 
+            if _tool_result_failed(result):
+                round_tool_failures += 1
+
             # Build output for frontend tool bubble.
             # Document tools get a short summary — content goes to the editor panel.
             output_text = ""
@@ -2153,10 +2407,70 @@ async def stream_agent_loop(
         if budget_hit:
             break
 
+        if round_tool_failures > 0:
+            tool_failure_streak += 1
+        elif tool_blocks:
+            tool_failure_streak = 0
+
         # Feed results back to LLM for next round
         _append_tool_results(messages, round_response, native_tool_calls,
                              tool_results, tool_result_texts, used_native, round_num,
                              round_reasoning=round_reasoning)
+
+        if supervisor_enabled and not _force_answer and supervisor_interventions < max(supervisor_max, 0):
+            loop_breaker_near = (_stuck_rounds >= 3) or any(n >= 12 for n in _tool_type_counts.values())
+            snapshot = {
+                "round": round_num,
+                "max_rounds": max_rounds,
+                "tool_failure_streak": tool_failure_streak,
+                "no_progress_streak": _stuck_rounds,
+                "loop_breaker_proximity": loop_breaker_near,
+                "stream_error_no_output": bool(round_stream_error and not round_useful_output),
+                "round_tool_failures": round_tool_failures,
+            }
+            _need_help, _trigger_reason = loop_should_intervene(snapshot)
+            if _need_help:
+                _runtime_candidates = _dedupe_candidates(
+                    (runtime_endpoint_url, runtime_model, runtime_headers),
+                    runtime_fallbacks,
+                )
+                decision = await _call_loop_supervisor(
+                    snapshot=snapshot,
+                    runtime_candidates=_runtime_candidates,
+                    worker_endpoint_url=runtime_endpoint_url,
+                    worker_model=runtime_model,
+                    worker_headers=runtime_headers,
+                    owner=owner,
+                )
+                _action = (decision.get("action") or "none").strip().lower()
+                _acted = False
+                if _action == "inject_instruction":
+                    _inst = (decision.get("instruction") or "").strip()
+                    if _inst:
+                        messages.append({
+                            "role": "system",
+                            "content": f"Supervisor guidance (runtime-only): {_inst}",
+                        })
+                        supervisor_interventions += 1
+                        _acted = True
+                elif _action == "switch_candidate":
+                    _idx = decision.get("candidate_index")
+                    if isinstance(_idx, int) and 0 <= _idx < len(_runtime_candidates):
+                        _sel_url, _sel_model, _sel_headers = _runtime_candidates[_idx]
+                        _new_key = _candidate_key(_sel_url, _sel_model)
+                        _cur_key = _candidate_key(runtime_endpoint_url, runtime_model)
+                        if _new_key != _cur_key and _new_key not in supervisor_switched_keys:
+                            _old_url, _old_model = runtime_endpoint_url, runtime_model
+                            runtime_endpoint_url, runtime_model, runtime_headers = _sel_url, _sel_model, _sel_headers
+                            supervisor_switched_keys.add(_new_key)
+                            supervisor_interventions += 1
+                            tool_failure_streak = 0
+                            set_active_model(runtime_model)
+                            _acted = True
+                            yield f'data: {json.dumps({"type": "model_fallback", "data": {"old_model": _old_model, "new_model": runtime_model, "old_endpoint": _old_url, "new_endpoint": runtime_endpoint_url, "reason": "loop_supervisor_switch"}})}\n\n'
+                            yield f'data: {json.dumps({"type": "model_info", "model": runtime_model})}\n\n'
+                if _acted:
+                    yield f'data: {json.dumps({"type": "supervisor_note", "data": {"round": round_num, "trigger": _trigger_reason, "action": _action, "reason": decision.get("reason") or ""}})}\n\n'
 
         # Emit agent_step event
         yield (
@@ -2178,7 +2492,7 @@ async def stream_agent_loop(
     metrics = _compute_final_metrics(
         messages, full_response, total_duration, time_to_first_token,
         context_length, real_input_tokens, real_output_tokens,
-        has_real_usage, tool_events, round_texts, model=model,
+        has_real_usage, tool_events, round_texts, model=runtime_model,
         last_round_input_tokens=last_round_input_tokens,
         prep_timings=prep_timings,
     )
@@ -2193,7 +2507,7 @@ async def stream_agent_loop(
         try:
             from src.teacher_escalation import run_teacher_inline
             async for evt in run_teacher_inline(
-                student_endpoint_url=endpoint_url,
+                student_endpoint_url=runtime_endpoint_url,
                 student_messages=messages,
                 student_tool_events=tool_events,
                 student_reply=full_response,

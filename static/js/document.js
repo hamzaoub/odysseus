@@ -129,12 +129,15 @@ import * as Modals from './modalManager.js';
     }
   }
 
-  /** Switch chat to agent mode if not already */
+  /** Switch chat to a tool-enabled mode if not already */
   function _ensureAgentMode() {
     const ab = document.getElementById('mode-agent-btn');
+    const lb = document.getElementById('mode-loop-btn');
     const cb = document.getElementById('mode-chat-btn');
-    if (ab && !ab.classList.contains('active')) {
-      ab.click();
+    const toolModeActive = (ab && ab.classList.contains('active')) || (lb && lb.classList.contains('active'));
+    if (!toolModeActive) {
+      if (ab) ab.click();
+      else if (lb) lb.click();
     }
   }
 

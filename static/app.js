@@ -1519,7 +1519,7 @@ function initializeEventListeners() {
     const state = loadToggleState();
     const key = _modeKey(stateKey, mode);
     if (Object.prototype.hasOwnProperty.call(state, key)) return !!state[key];
-    return mode === 'agent'; // default: ON in agent, OFF in chat
+    return mode === 'agent' || mode === 'loop'; // default: ON in tool-enabled modes
   }
 
   function saveToolPref(stateKey, mode, value) {
@@ -1550,23 +1550,38 @@ function initializeEventListeners() {
   }
 
   // ── Agent / Chat mode toggle ──
+  function applyModeVisual(mode) {
+    const agentBtn = el('mode-agent-btn');
+    const loopBtn = el('mode-loop-btn');
+    const chatBtn = el('mode-chat-btn');
+    if (agentBtn) agentBtn.classList.toggle('active', mode === 'agent');
+    if (loopBtn) loopBtn.classList.toggle('active', mode === 'loop');
+    if (chatBtn) chatBtn.classList.toggle('active', mode === 'chat');
+    const toggle = (agentBtn || loopBtn || chatBtn)
+      ? (agentBtn || loopBtn || chatBtn).closest('.mode-toggle')
+      : null;
+    if (toggle) {
+      toggle.classList.toggle('mode-loop', mode === 'loop');
+      toggle.classList.toggle('mode-chat', mode === 'chat');
+    }
+  }
+  window._applyModeVisual = applyModeVisual;
+
   (function initModeToggle() {
     const agentBtn = el('mode-agent-btn');
+    const loopBtn = el('mode-loop-btn');
     const chatBtn = el('mode-chat-btn');
     if (!agentBtn || !chatBtn) return;
     const state = loadToggleState();
     let currentMode = state.mode || 'chat';
+    if (!['agent', 'loop', 'chat'].includes(currentMode)) currentMode = 'chat';
 
     function setMode(mode) {
       currentMode = mode;
       const st = loadToggleState();
       st.mode = mode;
       saveToggleState(st);
-      agentBtn.classList.toggle('active', mode === 'agent');
-      chatBtn.classList.toggle('active', mode === 'chat');
-      // Slide the pill to the active button
-      const toggle = agentBtn.closest('.mode-toggle');
-      if (toggle) toggle.classList.toggle('mode-chat', mode === 'chat');
+      applyModeVisual(mode);
       // Delay tool glow-up for a staggered effect
       setTimeout(() => applyModeToToggles(mode), 500);
     }
@@ -1576,6 +1591,13 @@ function initializeEventListeners() {
       if (resChk && resChk.checked) _syncResearchIndicator(false);
       setMode('agent');
     });
+    if (loopBtn) {
+      loopBtn.addEventListener('click', () => {
+        const resChk = el('research-toggle');
+        if (resChk && resChk.checked) _syncResearchIndicator(false);
+        setMode('loop');
+      });
+    }
     chatBtn.addEventListener('click', () => setMode('chat'));
     setMode(currentMode);
   })();
@@ -1615,7 +1637,7 @@ function initializeEventListeners() {
   function setupToggle(btnId, checkboxId, stateKey) {
     const btn = el(btnId);
     if (!btn) return;
-    // Restore per-mode saved state for both Agent and Chat modes.
+    // Restore per-mode saved state for all mode variants.
     const mode = (loadToggleState().mode) || 'chat';
     const saved = loadToolPref(stateKey, mode);
     const chk = el(checkboxId);
@@ -1896,12 +1918,10 @@ function initializeEventListeners() {
           }
           // Research requires chat mode — force switch from agent
           const rs = loadToggleState();
-          if (rs.mode === 'agent') {
+          if (rs.mode === 'agent' || rs.mode === 'loop') {
             rs.mode = 'chat';
             saveToggleState(rs);
-            const ab = el('mode-agent-btn'), cb = el('mode-chat-btn');
-            if (ab) ab.classList.remove('active');
-            if (cb) cb.classList.add('active');
+            applyModeVisual('chat');
             applyModeToToggles('chat');
           }
         }
@@ -2148,12 +2168,10 @@ function initializeEventListeners() {
         }
         // Research requires chat mode
         const rs2 = loadToggleState();
-        if (rs2.mode === 'agent') {
+        if (rs2.mode === 'agent' || rs2.mode === 'loop') {
           rs2.mode = 'chat';
           saveToggleState(rs2);
-          const ab2 = el('mode-agent-btn'), cb2 = el('mode-chat-btn');
-          if (ab2) ab2.classList.remove('active');
-          if (cb2) cb2.classList.add('active');
+          applyModeVisual('chat');
           applyModeToToggles('chat');
         }
       }
@@ -2252,14 +2270,12 @@ function initializeEventListeners() {
         if (tipEl) { tipEl.dataset.originalTip = tipEl.textContent; tipEl.textContent = 'Temporary session \u2014 won\u2019t be saved and no memory activation.'; tipEl.style.opacity = '0.5'; tipEl.style.marginTop = '8px'; }
         // Default to plain chat: disable tools visually, switch to chat mode.
         // IMPORTANT: don't overwrite the user's persisted per-mode tool prefs
-        // (`web_agent`, `bash_agent`, `web_chat`, `bash_chat`). Nobody mode is
+        // (`web_agent`, `bash_agent`, `web_loop`, `bash_loop`, `web_chat`, `bash_chat`). Nobody mode is
         // ephemeral — their agent-mode defaults must come back on toggle-off.
         const _offIds = ['web-toggle', 'bash-toggle', 'research-toggle'];
         _offIds.forEach(id => { const c = el(id); if (c) c.checked = false; });
         ['web-toggle-btn', 'bash-toggle-btn'].forEach(id => { const b = el(id); if (b) b.classList.remove('active'); });
-        const _ab = el('mode-agent-btn'), _cb = el('mode-chat-btn');
-        if (_ab) _ab.classList.remove('active');
-        if (_cb) _cb.classList.add('active');
+        applyModeVisual('chat');
         const ts = Storage.getJSON(Storage.KEYS.TOGGLES, {});
         ts.research = false; ts.mode = 'chat';
         Storage.setJSON(Storage.KEYS.TOGGLES, ts);
@@ -2286,7 +2302,7 @@ function initializeEventListeners() {
         // so agent-mode defaults (web/bash ON) come back.
         const _ts = Storage.getJSON(Storage.KEYS.TOGGLES, {});
         let _dirty = false;
-        ['web_agent', 'bash_agent', 'web_chat', 'bash_chat'].forEach(k => {
+        ['web_agent', 'bash_agent', 'web_loop', 'bash_loop', 'web_chat', 'bash_chat'].forEach(k => {
           if (_ts[k] === false) { delete _ts[k]; _dirty = true; }
         });
         if (_dirty) Storage.setJSON(Storage.KEYS.TOGGLES, _ts);

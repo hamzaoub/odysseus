@@ -1194,6 +1194,32 @@ async function _cmdToggleSidebar(args, ctx) {
   return true;
 }
 
+// ── Mode ──
+
+async function _cmdMode(args, ctx) {
+  const mode = (args[0] || '').toLowerCase();
+  if (mode !== 'agent' && mode !== 'loop' && mode !== 'chat') {
+    slashReply(`Current mode: ${Storage.getToggle('mode', 'chat')}. Usage: /mode &lt;agent|loop|chat&gt;`);
+    return true;
+  }
+  const ab = document.getElementById('mode-agent-btn');
+  const lb = document.getElementById('mode-loop-btn');
+  const cb = document.getElementById('mode-chat-btn');
+  if (ab) ab.classList.toggle('active', mode === 'agent');
+  if (lb) lb.classList.toggle('active', mode === 'loop');
+  if (cb) cb.classList.toggle('active', mode === 'chat');
+  const toggle = (ab || lb || cb) ? (ab || lb || cb).closest('.mode-toggle') : null;
+  if (toggle) {
+    toggle.classList.toggle('mode-loop', mode === 'loop');
+    toggle.classList.toggle('mode-chat', mode === 'chat');
+  }
+  Storage.setToggle('mode', mode);
+  document.querySelectorAll('[data-mode-tool]').forEach(b => { b.style.display = (mode === 'agent' || mode === 'loop') ? '' : 'none'; });
+  await typewriterReply(`Mode: ${mode}`);
+  return true;
+}
+
+
 // ── Settings ──
 
 async function _cmdOpen(args, ctx) {
@@ -2185,12 +2211,14 @@ async function _cmdDemo(args, ctx) {
   // turn Web on) actually have something to do.
   try {
     const _agentBtn = document.getElementById('mode-agent-btn');
+    const _loopBtn = document.getElementById('mode-loop-btn');
     const _chatBtn  = document.getElementById('mode-chat-btn');
     if (_agentBtn && _chatBtn) {
       _agentBtn.classList.remove('active');
+      if (_loopBtn) _loopBtn.classList.remove('active');
       _chatBtn.classList.add('active');
       const _t = _agentBtn.closest('.mode-toggle');
-      if (_t) _t.classList.add('mode-chat');
+      if (_t) { _t.classList.remove('mode-loop'); _t.classList.add('mode-chat'); }
     }
     // Web is persisted per-mode under web_chat / web_agent. Zero both so the
     // toggle is genuinely off when the user reaches the "turn it on" step.
@@ -5549,6 +5577,13 @@ const COMMANDS = {
     help: 'Send a random starter prompt',
     handler: _cmdPrompt,
     usage: '/prompt'
+  },
+  mode: {
+    alias: [],
+    category: 'Settings',
+    help: 'Switch agent/loop/chat mode',
+    handler: _cmdMode,
+    usage: '/mode agent|loop|chat'
   },
   theme: {
     alias: [],

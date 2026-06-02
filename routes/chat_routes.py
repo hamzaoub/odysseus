@@ -306,11 +306,13 @@ def setup_chat_routes(
         search_context = form_data.get("search_context")  # pre-fetched web search results (compare mode)
         compare_mode = str(form_data.get("compare_mode", "")).lower() == "true"
         incognito = str(form_data.get("incognito", "")).lower() == "true"
-        chat_mode = str(form_data.get("mode", "")).lower()  # 'chat' or 'agent'
+        chat_mode = str(form_data.get("mode", "")).lower()  # 'chat', 'agent', or 'loop'
+        if chat_mode not in ("chat", "agent", "loop"):
+            chat_mode = "chat"
         # Did the USER explicitly pick agent mode? (vs. us auto-escalating
         # below). Skill extraction should only learn from real agent sessions,
         # not chats we quietly promoted for a notes/calendar intent.
-        user_requested_agent = (chat_mode == "agent")
+        user_requested_agent = (chat_mode in ("agent", "loop"))
         # Intent auto-escalation: if the user is clearly asking the assistant
         # to create a todo, reminder, or calendar event, promote chat → agent
         # for this turn so the LLM has access to manage_notes / manage_calendar.
@@ -379,9 +381,9 @@ def setup_chat_routes(
                 do_research = True
                 logger.info(f"Session {session} in research_pending — auto-triggering research")
 
-        # Persist session mode (research > agent > chat)
+        # Persist session mode (research > loop/agent > chat)
         _effective_mode = 'research' if do_research else (chat_mode or 'chat')
-        if _effective_mode in ('agent', 'research', 'chat'):
+        if _effective_mode in ('agent', 'research', 'chat', 'loop'):
             set_session_mode(session, _effective_mode)
 
         att_ids = []
@@ -414,7 +416,7 @@ def setup_chat_routes(
             # Skills index only ships when the model can actually call
             # manage_skills (agent mode). In plain chat or incognito the
             # index would be useless / unwanted noise.
-            agent_mode=(chat_mode == "agent"),
+            agent_mode=(chat_mode in ("agent", "loop")),
         )
 
         _research_flags = {"do": do_research}  # Mutable container for generator scope
@@ -897,6 +899,7 @@ def setup_chat_routes(
                         disabled_tools=disabled_tools if disabled_tools else None,
                         owner=_user,
                         fallbacks=_fallback_candidates,
+                        supervisor_enabled=(chat_mode == "loop"),
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
@@ -916,6 +919,7 @@ def setup_chat_routes(
                                     "tool_start", "tool_output", "agent_step",
                                     "doc_stream_open", "doc_stream_delta",
                                     "doc_update", "doc_suggestions", "ui_control",
+                                    "model_fallback", "supervisor_note", "model_info",
                                 ):
                                     if data.get("type") == "agent_step":
                                         _agent_rounds = max(_agent_rounds, data.get("round", 1))
@@ -931,7 +935,12 @@ def setup_chat_routes(
                                     yield chunk
                                 elif data.get("type") == "metrics":
                                     last_metrics = data.get("data", {})
+<<<<<<< Updated upstream
                                     last_metrics["model"] = _answered_by or sess.model
+=======
+                                    if "model" not in last_metrics:
+                                        last_metrics["model"] = sess.model
+>>>>>>> Stashed changes
                                     yield f'data: {json.dumps({"type": "metrics", "data": last_metrics})}\n\n'
                             except json.JSONDecodeError:
                                 yield chunk

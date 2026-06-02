@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sled Sketch - Physics Sandbox</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0a3d62, #1e5799);
+            color: #fff;
+            min-height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 900px;
+        }
+        
+        h1 {
+            font-size: 2.8rem;
+            margin-bottom: 10px;
+            text-shadow: 0 0 15px rgba(255, 255, 255, 0.7);
+            background: linear-gradient(to right, #a8e6cf, #dcedc8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 1px;
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 20px;
+        }
+        
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 900px;
+            background: rgba(0, 20, 40, 0.7);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(100, 180, 255, 0.3);
+        }
+        
+        .stats-panel {
+            display: flex;
+            justify-content: space-between;
+            background: rgba(0, 30, 60, 0.8);
+            padding: 12px 15px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            font-size: 1rem;
+            border: 1px solid rgba(100, 180, 255, 0.2);
+        }
+        
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .stat-value {
+            font-weight: bold;
+            font-size: 1.2rem;
+            color: #a8e6cf;
+        }
+        
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            height: 500px;
+            background: #0a1929;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0, 100, 200, 0.3);
+            border: 1px solid rgba(100, 180, 255, 0.2);
+        }
+        
+        #gameCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .minimap {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 120px;
+            height: 100px;
+            background: rgba(0, 10, 20, 0.7);
+            border-radius: 8px;
+            border: 1px solid rgba(100, 180, 255, 0.3);
+            overflow: hidden;
+        }
+        
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(0, 30, 60, 0.7);
+            border-radius: 10px;
+        }
+        
+        .tool-btn {
+            background: rgba(30, 60, 100, 0.8);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            border: 1px solid rgba(100, 180, 255, 0.3);
+        }
+        
+        .tool-btn:hover {
+            background: rgba(50, 100, 180, 0.9);
+            transform: translateY(-2px);
+        }
+        
+        .tool-btn.active {
+            background: rgba(0, 200, 255, 0.7);
+            box-shadow: 0 0 10px rgba(0, 200, 255, 0.5);
+        }
+        
+        .tool-btn i {
+            font-size: 1.2rem;
+        }
+        
+        .instructions {
+            background: rgba(0, 30, 60, 0.7);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            font-size: 0.9rem;
+            border: 1px solid rgba(100, 180, 255, 0.2);
+        }
+        
+        .instructions h3 {
+            margin-bottom: 10px;
+            color: #a8e6cf;
+        }
+        
+        .instructions ul {
+            padding-left: 20px;
+        }
+        
+        .instructions li {
+            margin-bottom: 5px;
+        }
+        
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(5, 15, 35, 0.95);
+            z-index: 10;
+            text-align: center;
+            padding: 20px;
+            border-radius: 15px;
+        }
+        
+        .screen h2 {
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+            color: #a8e6cf;
+        }
+        
+        .screen p {
+            font-size: 1.2rem;
+            max-width: 600px;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        
+        .start-btn {
+            background: linear-gradient(to right, #00c6ff, #0072ff);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            box-shadow: 0 5px 15px rgba(0, 114, 255, 0.4);
+        }
+        
+        .start-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 7px 20px rgba(0, 114, 255, 0.6);
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .particle {
+            position: absolute;
+            pointer-events: none;
+            border-radius: 50%;
+        }
+        
+        @media (max-width: 768px) {
+            .stats-panel {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .tool-btn {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Sled Sketch</h1>
+        <p class="subtitle">Draw tracks, watch physics, and build the perfect ride</p>
+    </div>
+    
+    <div class="game-container">
+        <div class="stats-panel">
+            <div class="stat-item">
+                <span>Distance</span>
+                <span id="distance" class="stat-value">0m</span>
+            </div>
+            <div class="stat-item">
+                <span>Air Time</span>
+                <span id="airtime" class="stat-value">0s</span>
+            </div>
+            <div class="stat-item">
+                <span>Speed</span>
+                <span id="speed" class="stat-value">0 km/h</span>
+            </div>
+            <div class="stat-item">
+                <span>Crashes</span>
+                <span id="crashes" class="stat-value">0</span>
+            </div>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="gameCanvas"></canvas>
+            <div class="minimap" id="minimap"></div>
+            <div id="startScreen" class="screen">
+                <h2>Sled Sketch</h2>
+                <p>Draw tracks with your mouse, then watch your sled rider navigate the physics-based world!</p>
+                <button id="startButton" class="start-btn">START RIDE</button>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="drawTool" class="tool-btn active">
+                <i>✏️</i> Draw Track
+            </button>
+            <button id="eraseTool" class="tool-btn">
+                <i>🧹</i> Erase
+            </button>
+            <button id="moveTool" class="tool-btn">
+                <i>🧭</i> Move Camera
+            </button>
+            <button id="riderTool" class="tool-btn">
+                <i>🛹</i> Place Rider
+            </button>
+            <button id="playPause" class="tool-btn">
+                <i>▶️</i> Play
+            </button>
+            <button id="resetRider" class="tool-btn">
+                <i>↩️</i> Reset Rider
+            </button>
+            <button id="clearTrack" class="tool-btn">
+                <i>🗑️</i> Clear Track
+            </button>
+            <button id="zoomIn" class="tool-btn">
+                <i>🔍</i> Zoom In
+            </button>
+            <button id="zoomOut" class="tool-btn">
+                <i>🔍</i> Zoom Out
+            </button>
+        </div>
+        
+        <div class="instructions">
+            <h3>How to Play</h3>
+            <ul>
+                <li><strong>Draw tracks</strong> with the mouse to create your path</li>
+                <li><strong>Click Play</strong> to start the sled rider</li>
+                <li><strong>Use tools</strong> to erase, move camera, or place rider</li>
+                <li><strong>Watch physics</strong> in action - slides, bounces, and more!</li>
+                <li><strong>Try ramps and loops</strong> for thrilling rides!</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Game state
+        const gameState = {
+            isRunning: false,
+            isPlaying: false,
+            currentTool: 'draw',
+            camera: { x: 0, y: 0 },
+            scale: 1,
+            tracks: [],
+            rider: {
+                x: 0,
+                y: 0,
+                vx: 0,
+                vy: 0,
+                angle: 0,
+                onGround: false,
+                crashed: false
+            },
+            particles: [],
+            trackPoints: [],
+            distance: 0,
+            airtime: 0,
+            speed: 0,
+            crashes: 0,
+            bestDistance: parseInt(localStorage.getItem('sledSketchBestDistance') || '0'),
+            lastTime: 0,
+            zoom: 1
+        };
+
+        // Canvas setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const minimap = document.getElementById('minimap');
+        const startScreen = document.getElementById('startScreen');
+        const startButton = document.getElementById('startButton');
+        const distanceEl = document.getElementById('distance');
+        const airtimeEl = document.getElementById('airtime');
+        const speedEl = document.getElementById('speed');
+        const crashesEl = document.getElementById('crashes');
+
+        // Set canvas size
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            minimap.style.width = '120px';
+            minimap.style.height = '100px';
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Tool buttons
+        const tools = {
+            draw: document.getElementById('drawTool'),
+            erase: document.getElementById('eraseTool'),
+            move: document.getElementById('moveTool'),
+            rider: document.getElementById('riderTool'),
+            play: document.getElementById('playPause'),
+            reset: document.getElementById('resetRider'),
+            clear: document.getElementById('clearTrack'),
+            zoomIn: document.getElementById('zoomIn'),
+            zoomOut: document.getElementById('zoomOut')
+        };
+
+        // Initialize UI
+        function initUI() {
+            // Set active tool button
+            document.querySelectorAll('.tool-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            tools.draw.classList.add('active');
+        }
+
+        // Event listeners for tools
+        tools.draw.addEventListener('click', () => setTool('draw'));
+        tools.erase.addEventListener('click', () => setTool('erase'));
+        tools.move.addEventListener('click', () => setTool('move'));
+        tools.rider.addEventListener('click', () => setTool('rider'));
+        tools.play.addEventListener('click', togglePlayPause);
+        tools.reset.addEventListener('click', resetRider);
+        tools.clear.addEventListener('click', clearTrack);
+        tools.zoomIn.addEventListener('click', () => zoom(1.2));
+        tools.zoomOut.addEventListener('click', () => zoom(0.8));
+
+        function setTool(tool) {
+            gameState.currentTool = tool;
+            document.querySelectorAll('.tool-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            tools[tool].classList.add('active');
+        }
+
+        function togglePlayPause() {
+            gameState.isPlaying = !gameState.isPlaying;
+            tools.play.innerHTML = gameState.isPlaying ? '<i>⏸️</i> Pause' : '<i>▶️</i> Play';
+        }
+
+        function resetRider() {
+            gameState.rider.x = 100;
+            gameState.rider.y = 100;
+            gameState.rider.vx = 0;
+            gameState.rider.vy = 0;
+            gameState.rider.angle = 0;
+            gameState.rider.onGround = false;
+            gameState.rider.crashed = false;
+            gameState.distance = 0;
+            gameState.airtime = 0;
+            gameState.speed = 0;
+            updateStats();
+        }
+
+        function clearTrack() {
+            gameState.tracks = [];
+            gameState.rider.x = 100;
+            gameState.rider.y = 100;
+            gameState.rider.vx = 0;
+            gameState.rider.vy = 0;
+            gameState.distance = 0;
+            gameState.airtime = 0;
+            gameState.speed = 0;
+            gameState.crashes = 0;
+            updateStats();
+        }
+
+        function zoom(factor) {
+            gameState.zoom = Math.max(0.5, Math.min(3, gameState.zoom * factor));
+            ctx.save();
+            ctx.scale(gameState.zoom, gameState.zoom);
+        }
+
+        // Start game
+        startButton.addEventListener('click', () => {
+            startScreen.classList.add('hidden');
+            resetRider();
+            setTool('draw');
+        });
+
+        // Mouse handling
+        let isDrawing = false;
+        let currentPath = [];
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+
+        function startDrawing(e) {
+            if (gameState.isPlaying) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            if (gameState.currentTool === 'draw') {
+                isDrawing = true;
+                currentPath = [{x, y}];
+            } else if (gameState.currentTool === 'erase') {
+                eraseAtPoint(x, y);
+            } else if (gameState.currentTool === 'rider') {
+                gameState.rider.x = x;
+                gameState.rider.y = y;
+            }
+        }
+
+        function draw(e) {
+            if (!isDrawing || gameState.isPlaying) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            if (gameState.currentTool === 'draw') {
+                currentPath.push({x, y});
+            }
+        }
+
+        function stopDrawing() {
+            if (!isDrawing || gameState.isPlaying) return;
+            isDrawing = false;
+            
+            if (gameState.currentTool === 'draw' && currentPath.length > 1) {
+                gameState.tracks.push(currentPath);
+            }
+            currentPath = [];
+        }
+
+        function eraseAtPoint(x, y) {
+            // Simple erase logic - remove close tracks
+            for (let i = gameState.tracks.length - 1; i >= 0; i--) {
+                const track = gameState.tracks[i];
+                for (let j = 0; j < track.length - 1; j++) {
+                    const p1 = track[j];
+                    const p2 = track[j + 1];
+                    
+                    // Simple distance check
+                    const distance = Math.sqrt(
+                        Math.pow(x - p1.x, 2) + Math.pow(y - p1.y, 2)
+                    );
+                    if (distance < 20) {
+                        gameState.tracks.splice(i, 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Physics functions
+        const GRAVITY = 0.5;
+        const FRICTION = 0.98;
+        const BOUNCE = 0.7;
+        const MAX_SPEED = 15;
+
+        function updatePhysics(deltaTime) {
+            if (!gameState.isPlaying) return;
+            
+            const rider = gameState.rider;
+            
+            // Apply gravity
+            rider.vy += GRAVITY;
+            
+            // Apply friction
+            rider.vx *= FRICTION;
+            rider.vy *= FRICTION;
+            
+            // Update position
+            rider.x += rider.vx;
+            rider.y += rider.vy;
+            
+            // Check collisions with tracks
+            checkCollisions();
+            
+            // Update stats
+            if (rider.onGround) {
+                gameState.airtime = 0;
+                // Calculate distance traveled
+                gameState.distance = Math.max(gameState.distance, Math.sqrt(
+                    Math.pow(rider.x, 2) + Math.pow(rider.y, 2)
+                ) / 10);
+            } else {
+                gameState.airtime += deltaTime;
+            }
+            
+            // Update speed
+            gameState.speed = Math.sqrt(rider.vx * rider.vx + rider.vy * rider.vy) * 20;
+            
+            // Update angle based on movement
+            if (rider.vx !== 0 || rider.vy !== 0) {
+                rider.angle = Math.atan2(rider.vy, rider.vx);
+            }
+            
+            // Check if rider is out of bounds or crashed
+            if (rider.y > canvas.height + 100 || rider.x < -100 || rider.x > canvas.width + 100) {
+                rider.crashed = true;
+                gameState.crashes++;
+            }
+            
+            // Update stats display
+            updateStats();
+        }
+
+        function checkCollisions() {
+            const rider = gameState.rider;
+            const riderRadius = 12;
+            
+            // Check each track segment
+            for (const track of gameState.tracks) {
+                for (let i = 0; i < track.length - 1; i++) {
+                    const p1 = track[i];
+                    const p2 = track[i + 1];
+                    
+                    // Line segment from p1 to p2
+                    const lineVecX = p2.x - p1.x;
+                    const lineVecY = p2.y - p1.y;
+                    const lineLength = Math.sqrt(lineVecX * lineVecX + lineVecY * lineVecY);
+                    
+                    if (lineLength === 0) continue;
+                    
+                    const lineUnitX = lineVecX / lineLength;
+                    const lineUnitY = lineVecY / lineLength;
+                    
+                    // Vector from p1 to rider center
+                    const riderVecX = rider.x - p1.x;
+                    const riderVecY = rider.y - p1.y;
+                    
+                    // Project rider vector onto the line
+                    const projectionLength = riderVecX * lineUnitX + riderVecY * lineUnitY;
+                    const clampedProjection = Math.max(0, Math.min(lineLength, projectionLength));
+                    
+                    // Closest point on line segment
+                    const closestX = p1.x + clampedProjection * lineUnitX;
+                    const closestY = p1.y + clampedProjection * lineUnitY;
+                    
+                    // Distance to closest point
+                    const distance = Math.sqrt(
+                        Math.pow(rider.x - closestX, 2) + Math.pow(rider.y - closestY, 2)
+                    );
+                    
+                    // Collision detected
+                    if (distance <= riderRadius) {
+                        // Normal vector (perpendicular to line)
+                        const normalX = rider.x - closestX;
+                        const normalY = rider.y - closestY;
+                        const normalLength = Math.sqrt(normalX * normalX + normalY * normalY);
+                        
+                        if (normalLength > 0) {
+                            const normX = normalX / normalLength;
+                            const normY = normalY / normalLength;
+                            
+                            // Reflect velocity
+                            const dot = rider.vx * normX + rider.vy * normY;
+                            rider.vx = (rider.vx - 2 * dot * normX) * BOUNCE;
+                            rider.vy = (rider.vy - 2 * dot * normY) * BOUNCE;
+                            
+                            // Adjust position to prevent sticking
+                            const overlap = riderRadius - distance;
+                            rider.x += normX * overlap * 1.5;
+                            rider.y += normY * overlap * 1.5;
+                            
+                            rider.onGround = true;
+                            
+                            // Create sparks
+                            createParticles(closestX, closestY, 5, '#ffd700', 20);
+                            
+                            return;
+                        }
+                    }
+                }
+            }
+            
+            // No collision - not on ground
+            rider.onGround = false;
+        }
+
+        // Particle system
+        function createParticles(x, y, count, color, speed) {
+            for (let i = 0; i < count; i++) {
+                gameState.particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * speed,
+                    vy: (Math.random() - 0.5) * speed,
+                    life: 30,
+                    maxLife: 30,
+                    color: color,
+                    size: Math.random() * 3 + 1
+                });
+            }
+        }
+
+        function updateParticles() {
+            for (let i = gameState.particles.length - 1; i >= 0; i--) {
+                const p = gameState.particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life--;
+                
+                if (p.life <= 0) {
+                    gameState.particles.splice(i, 1);
+                }
+            }
+        }
+
+        // Draw functions
+        function drawTrack() {
+            for (const track of gameState.tracks) {
+                if (track.length < 2) continue;
+                
+                ctx.beginPath();
+                ctx.moveTo(track[0].x, track[0].y);
+                
+                for (let i = 1; i < track.length; i++) {
+                    ctx.lineTo(track[i].x, track[i].y);
+                }
+                
+                ctx.strokeStyle = 'rgba(100, 200, 255, 0.8)';
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+                
+                // Glow effect
+                ctx.shadowColor = 'rgba(100, 200, 255, 0.8)';
+                ctx.shadowBlur = 15;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        function drawRider() {
+            const rider = gameState.rider;
+            
+            ctx.save();
+            ctx.translate(rider.x, rider.y);
+            ctx.rotate(rider.angle);
+            
+            // Sled body
+            ctx.fillStyle = '#ff6b6b';
+            ctx.fillRect(-15, -8, 30, 16);
+            
+            // Sled details
+            ctx.fillStyle = '#4ecdc4';
+            ctx.fillRect(-10, -12, 20, 4);
+            
+            // Rider
+            ctx.fillStyle = '#ffd166';
+            ctx.beginPath();
+            ctx.arc(0, -5, 8, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Rider body
+            ctx.fillStyle = '#ef476f';
+            ctx.fillRect(-4, 3, 8, 12);
+            
+            // Sled spikes
+            ctx.strokeStyle = '#ff9a8d';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-13, 3);
+            ctx.lineTo(-10, 0);
+            ctx.lineTo(-13, -3);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(13, 3);
+            ctx.lineTo(10, 0);
+            ctx.lineTo(13, -3);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        function drawMinimap() {
+            const minimapCtx = minimap.getContext('2d');
+            minimapCtx.clearRect(0, 0, minimap.width, minimap.height);
+            
+            // Draw background
+            minimapCtx.fillStyle = '#0a1929';
+            minimapCtx.fillRect(0, 0, minimap.width, minimap.height);
+            
+            // Scale down tracks for minimap
+            const scale = 0.1;
+            minimapCtx.save();
+            minimapCtx.scale(scale, scale);
+            
+            for (const track of gameState.tracks) {
+                if (track.length < 2) continue;
+                
+                minimapCtx.beginPath();
+                minimapCtx.moveTo(track[0].x, track[0].y);
+                
+                for (let i = 1; i < track.length; i++) {
+                    minimapCtx.lineTo(track[i].x, track[i].y);
+                }
+                
+                minimapCtx.strokeStyle = '#64c8ff';
+                minimapCtx.lineWidth = 2;
+                minimapCtx.stroke();
+            }
+            
+            minimapCtx.restore();
+            
+            // Draw rider on minimap
+            minimapCtx.fillStyle = '#ff6b6b';
+            minimapCtx.beginPath();
+            minimapCtx.arc(gameState.rider.x * 0.1, gameState.rider.y * 0.1, 3, 0, Math.PI * 2);
+            minimapCtx.fill();
+        }
+
+        function drawParticles() {
+            for (const particle of gameState.particles) {
+                const alpha = particle.life / particle.maxLife;
+                ctx.globalAlpha = alpha;
+                ctx.fillStyle = particle.color;
+                ctx.beginPath();
+                ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        function drawSnow() {
+            // Simple snow effect
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (let i = 0; i < 100; i++) {
+                const x = (i * 13) % canvas.width;
+                const y = (i * 7 + Date.now() * 0.01) % canvas.height;
+                ctx.beginPath();
+                ctx.arc(x, y, 1, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function updateStats() {
+            distanceEl.textContent = Math.round(gameState.distance) + 'm';
+            airtimeEl.textContent = gameState.airtime.toFixed(1) + 's';
+            speedEl.textContent = Math.round(gameState.speed) + ' km/h';
+            crashesEl.textContent = gameState.crashes;
+            
+            // Update best distance if needed
+            if (gameState.distance > gameState.bestDistance) {
+                gameState.bestDistance = Math.round(gameState.distance);
+                localStorage.setItem('sledSketchBestDistance', gameState.bestDistance);
+            }
+        }
+
+        // Main game loop
+        function gameLoop(timestamp) {
+            if (!gameState.lastTime) gameState.lastTime = timestamp;
+            const deltaTime = (timestamp - gameState.lastTime) / 16; // Normalize to 60fps
+            gameState.lastTime = timestamp;
+            
+            // Clear canvas
+            ctx.fillStyle = '#0a1929';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw background
+            drawSnow();
+            
+            // Draw tracks
+            drawTrack();
+            
+            // Update and draw particles
+            updateParticles();
+            drawParticles();
+            
+            // Draw rider
+            drawRider();
+            
+            // Update physics
+            updatePhysics(deltaTime);
+            
+            // Draw minimap
+            drawMinimap();
+            
+            // Continue loop
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game loop
+        requestAnimationFrame(gameLoop);
+        initUI();
+    </script>
+</body>
+</html>

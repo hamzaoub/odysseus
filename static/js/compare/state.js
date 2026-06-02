@@ -20,7 +20,7 @@ const state = {
   _compareElements: [],            // elements we added to container (for cleanup)
   _savedToggles: null,             // tool toggle states saved before compare
   _savedIndicatorDisplay: {},      // display state of toolbar indicators before compare
-  _savedMode: 'chat',              // agent/chat mode saved before compare
+  _savedMode: 'chat',              // agent/loop/chat mode saved before compare
   _hasVisibleResults: false,       // compare results still on screen after close
   _compareMode: 'chat',            // 'chat', 'agent', 'search', or 'research'
   _lastPrompt: '',                 // last prompt sent (for rematch)
